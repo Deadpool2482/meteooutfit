@@ -10,48 +10,36 @@ import requests
 import threading
 from kivy.clock import Clock
 
-# --- LOGICA DELLE TESSERE ---
+# --- LOGICA DELLE TESSERE GIORNALIERE ---
 class WeatherTile(MDCard):
-    def __init__(self, date, temp, weather_emoji, advice, **kwargs):
+    def __init__(self, date, temp, emoji, advice, **kwargs):
         super().__init__(**kwargs)
         self.orientation = "vertical"
         self.padding = "10dp"
         self.elevation = 2
         self.radius = [12, ]
-        self.md_bg_color = [1, 1, 1, 1] 
+        self.md_bg_color = [0.95, 0.95, 0.95, 1]
         
-        # Data
         self.add_widget(MDLabel(text=date, bold=True, halign="center", font_style="Caption"))
-        
-        # Temperatura + Emoji Meteo (es: "22°C ☀️")
-        self.add_widget(MDLabel(
-            text=f"{temp}°C {weather_emoji}", 
-            halign="center", 
-            font_style="H5", 
-            theme_text_color="Primary"
-        ))
-        
-        # Consiglio Outfit
-        self.add_widget(MDLabel(
-            text=advice, 
-            halign="center", 
-            font_style="Caption", 
-            theme_text_color="Secondary"
-        ))
+        self.add_widget(MDLabel(text=f"{temp}°C {emoji}", halign="center", font_style="H5"))
+        self.add_widget(MDLabel(text=advice, halign="center", font_style="Caption", theme_text_color="Secondary"))
 
 # --- SCHERMATA PRINCIPALE ---
 class MeteoScreen(MDScreen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        layout = MDBoxLayout(orientation='vertical', spacing="10dp")
+        layout = MDBoxLayout(orientation='vertical')
         
-        layout.add_widget(MDTopAppBar(title="Meteo & Outfit"))
+        # Barra superiore
+        layout.add_widget(MDTopAppBar(title="Meteo & Outfit Pro"))
         
+        # Griglia per i 6 giorni
         self.grid = MDGridLayout(cols=2, spacing="15dp", padding="15dp")
         layout.add_widget(self.grid)
         
+        # Pulsante di aggiornamento
         layout.add_widget(MDRaisedButton(
-            text="AGGIORNA DATI",
+            text="AGGIORNA PREVISIONI",
             pos_hint={"center_x": .5},
             on_release=self.start_fetch,
             size_hint=(0.9, None),
@@ -61,60 +49,52 @@ class MeteoScreen(MDScreen):
         layout.add_widget(MDBoxLayout(size_hint_y=None, height="20dp"))
         self.add_widget(layout)
 
-    def get_clothing(self, t):
-        if t < 10: return "Cappotto 🧥"
-        if t < 18: return "Giacca/Maglione 🧥"
-        if t < 25: return "T-shirt e Jeans 👕"
-        return "Vestiti Leggeri 😎"
-
-    # Nuova funzione: Converte il codice numerico in Emoji
-    def get_weather_emoji(self, code):
-        if code == 0: return "☀️" # Sereno
-        if code in [1, 2, 3]: return "🌥️" # Nuvoloso
-        if code in [45, 48]: return "🌫️" # Nebbia
-        if code in [51, 53, 55, 61, 63, 65]: return "🌧️" # Pioggia
-        if code in [71, 73, 75]: return "❄️" # Neve
-        if code >= 95: return "⛈️" # Temporale
-        return "❓"
+    def get_weather_info(self, code, t):
+        # Determina l'emoji in base al weathercode dell'API
+        emoji = "☀️"
+        if code in [1, 2, 3]: emoji = "🌥️"
+        elif code in [45, 48]: emoji = "🌫️"
+        elif code in [51, 53, 55, 61, 63, 65]: emoji = "🌧️"
+        elif code >= 95: emoji = "⛈️"
+        
+        # Consiglio outfit basato sulla temperatura
+        advice = "Leggero 😎"
+        if t < 12: advice = "Cappotto 🧣"
+        elif t < 20: advice = "Giacca 🧥"
+        
+        return emoji, advice
 
     def start_fetch(self, *args):
+        # Pulisce la griglia e mostra caricamento
         self.grid.clear_widgets()
-        self.grid.add_widget(MDLabel(text="Scaricamento...", halign="center"))
-        threading.Thread(target=self.fetch_weather).start()
+        self.grid.add_widget(MDLabel(text="Caricamento dati...", halign="center"))
+        # Avvia lo scaricamento in un thread separato per non bloccare l'app
+        threading.Thread(target=self.fetch_data).start()
 
-    def fetch_weather(self):
-        # ORA CHIEDIAMO ANCHE 'weathercode'
+    def fetch_data(self):
+        # URL API con weathercode e temperature
         url = "https://api.open-meteo.com/v1/forecast?latitude=45.46&longitude=9.18&daily=temperature_2m_max,weathercode&timezone=auto"
         try:
             r = requests.get(url, timeout=10).json()
-            daily = r['daily']
-            
-            # Passiamo tutto alla grafica
-            Clock.schedule_once(lambda dt: self.update_ui(daily))
-        except Exception as e:
-            Clock.schedule_once(lambda dt: self.show_error(str(e)))
+            # Torna al thread principale per aggiornare l'interfaccia
+            Clock.schedule_once(lambda dt: self.update_ui(r['daily']))
+        except:
+            Clock.schedule_once(lambda dt: self.show_error())
 
-    def update_ui(self, daily, *args):
+    def update_ui(self, data):
         self.grid.clear_widgets()
-        dates = daily['time']
-        temps = daily['temperature_2m_max']
-        codes = daily['weathercode'] # I codici del meteo (0, 1, 45, ecc)
-
         for i in range(6):
-            day_label = "OGGI" if i == 0 else dates[i][5:]
-            emoji = self.get_weather_emoji(codes[i]) # Trasformiamo il codice in emoji
-            advice = self.get_clothing(temps[i])
-            
-            card = WeatherTile(day_label, temps[i], emoji, advice)
-            self.grid.add_widget(card)
+            emoji, advice = self.get_weather_info(data['weathercode'][i], data['temperature_2m_max'][i])
+            day = "OGGI" if i == 0 else data['time'][i][5:]
+            self.grid.add_widget(WeatherTile(day, data['temperature_2m_max'][i], emoji, advice))
 
-    def show_error(self, error_msg, *args):
+    def show_error(self):
         self.grid.clear_widgets()
-        self.grid.add_widget(MDLabel(text="Errore Internet!", halign="center"))
+        self.grid.add_widget(MDLabel(text="Errore di connessione!", halign="center", theme_text_color="Error"))
 
 class MeteoApp(MDApp):
     def build(self):
-        self.theme_cls.primary_palette = "DeepPurple" # Ho cambiato colore per festeggiare!
+        self.theme_cls.primary_palette = "Indigo"
         return MeteoScreen()
 
 if __name__ == "__main__":
